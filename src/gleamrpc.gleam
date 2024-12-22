@@ -25,21 +25,21 @@ pub type Router {
   Router(name: String, parent: option.Option(Router))
 }
 
-pub type ProcedureClient(params, return, error, d) {
+pub type ProcedureClient(params, return, error) {
   ProcedureClient(
     call: fn(
       Procedure(params, return),
       params,
-      fn(Result(return, GleamRPCError(error))) -> d,
+      fn(Result(return, GleamRPCError(error))) -> Nil,
     ) ->
-      d,
+      Nil,
   )
 }
 
-pub type ProcedureCall(params, return, error, d) {
+pub type ProcedureCall(params, return, error) {
   ProcedureCall(
     procedure: Procedure(params, return),
-    server: ProcedureClient(params, return, error, d),
+    server: ProcedureClient(params, return, error),
   )
 }
 
@@ -70,15 +70,15 @@ pub fn returns(
 
 pub fn with_client(
   procedure: Procedure(a, b),
-  server: ProcedureClient(a, b, c, d),
-) -> ProcedureCall(a, b, c, d) {
+  server: ProcedureClient(a, b, c),
+) -> ProcedureCall(a, b, c) {
   ProcedureCall(procedure, server)
 }
 
 pub fn call(
-  procedure_call: ProcedureCall(a, b, c, d),
+  procedure_call: ProcedureCall(a, b, c),
   params: a,
-  callback: fn(Result(b, GleamRPCError(c))) -> d,
-) -> d {
+  callback: fn(Result(b, GleamRPCError(c))) -> Nil,
+) -> Nil {
   procedure_call.server.call(procedure_call.procedure, params, callback)
 }
