@@ -39,9 +39,11 @@ pub fn main() {
     |> gleamrpc.returns(user_convert)
 
   // user is of type Result(User, gleamrpc.GleamRPCError)
-  let user = get_user
-  |> gleamrpc.with_client(client) // client is provided by the implementation you choose
-  |> gleamrpc.call("1")
+  use user <- get_user
+    |> gleamrpc.with_client(client) // client is provided by the implementation you choose
+    |> gleamrpc.call("1")
+
+  // Do something with your user
 }
 ```
 
