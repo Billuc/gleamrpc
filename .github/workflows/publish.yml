@@ -1,0 +1,29 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - v[0-9]+.[0-9]+.[0-9]+
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "26.0.2"
+          gleam-version: "1.6.1"
+          rebar3-version: "3"
+          # elixir-version: "1.15.4"
+      - run: gleam deps download
+      - name: Bumping version in gleam.toml
+        run: |
+          TAG=${{ github.ref_name }}
+          sed -i -r 's/version = "[0-9.]+"/version = "'${TAG#v}'"/g' gleam.toml
+      - name: Publishing to Hex
+        run: gleam publish -y
+        env:
+          HEXPM_USER: ${{ secrets.HEXPM_USER }}
+          HEXPM_PASS: ${{ secrets.HEXPM_PASS }}
+
