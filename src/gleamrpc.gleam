@@ -32,12 +32,15 @@ pub type GleamRPCError(error) {
   GleamRPCError(error: error)
 }
 
+pub type ProcedureError {
+  ProcedureError(message: String)
+}
+
 pub type GleamRPCServerError(error) {
   WrongProcedure
-  ProcedureError(error)
+  ProcedureExecError(error: ProcedureError)
   GetIdentityError(error)
-  GetParamsError(error)
-  DecodeError(error: List(dynamic.DecodeError))
+  GetParamsError(errors: List(dynamic.DecodeError))
 }
 
 pub type Router {
@@ -67,14 +70,20 @@ pub type ProcedureServer(transport_in, transport_out, error) {
     get_identity: fn(transport_in) ->
       Result(ProcedureIdentity, GleamRPCServerError(error)),
     get_params: fn(transport_in) ->
-      Result(convert.GlitrValue, GleamRPCServerError(error)),
+      fn(convert.GlitrType) ->
+        Result(convert.GlitrValue, GleamRPCServerError(error)),
     recover_error: fn(GleamRPCServerError(error)) -> transport_out,
     encode_result: fn(convert.GlitrValue) -> transport_out,
   )
 }
 
 pub type ProcedureHandler(context, error) =
-  fn(ProcedureIdentity, convert.GlitrValue, context) ->
+  fn(
+    ProcedureIdentity,
+    fn(convert.GlitrType) ->
+      Result(convert.GlitrValue, GleamRPCServerError(error)),
+    context,
+  ) ->
     Result(convert.GlitrValue, GleamRPCServerError(error))
 
 pub type ProcedureServerInstance(transport_in, transport_out, context, error) {
@@ -152,8 +161,7 @@ pub fn with_context(
 pub fn with_implementation(
   server: ProcedureServerInstance(transport_in, transport_out, context, error),
   procedure: Procedure(params, return),
-  implementation: fn(params, context) ->
-    Result(return, GleamRPCServerError(error)),
+  implementation: fn(params, context) -> Result(return, ProcedureError),
 ) -> ProcedureServerInstance(transport_in, transport_out, context, error) {
   ProcedureServerInstance(
     ..server,
@@ -167,10 +175,10 @@ pub fn serve(
   fn(in: transport_in) {
     let result = {
       use identity <- result.try(server.server.get_identity(in))
-      use params <- result.try(server.server.get_params(in))
+      let params_fn = server.server.get_params(in)
 
       let context = server.context_factory(in)
-      server.handler(identity, params, context)
+      server.handler(identity, params_fn, context)
       |> result.map(server.server.encode_result)
     }
 
@@ -184,11 +192,15 @@ pub fn serve(
 fn add_procedure(
   handler: ProcedureHandler(context, error),
   procedure: Procedure(params, return),
-  implementation: fn(params, context) ->
-    Result(return, GleamRPCServerError(error)),
+  implementation: fn(params, context) -> Result(return, ProcedureError),
 ) -> ProcedureHandler(context, error) {
-  fn(identity: ProcedureIdentity, params: convert.GlitrValue, context: context) {
-    case handler(identity, params, context) {
+  fn(
+    identity: ProcedureIdentity,
+    params_fn: fn(convert.GlitrType) ->
+      Result(convert.GlitrValue, GleamRPCServerError(error)),
+    context: context,
+  ) {
+    case handler(identity, params_fn, context) {
       Error(WrongProcedure) ->
         case identity {
           ProcedureIdentity(name, router, type_)
@@ -196,10 +208,17 @@ fn add_procedure(
             && router == procedure.router
             && type_ == procedure.type_
           -> {
+            use params <- result.try(params_fn(
+              procedure.params_type |> convert.type_def,
+            ))
+
             params
             |> convert.decode(procedure.params_type)
-            |> result.map_error(DecodeError)
-            |> result.then(implementation(_, context))
+            |> result.map_error(GetParamsError)
+            |> result.then(fn(params) {
+              implementation(params, context)
+              |> result.map_error(ProcedureExecError)
+            })
             |> result.map(convert.encode(procedure.return_type))
           }
           _ -> Error(WrongProcedure)
