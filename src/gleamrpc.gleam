@@ -70,7 +70,7 @@ pub type ProcedureServer(transport_in, transport_out, error) {
     get_identity: fn(transport_in) ->
       Result(ProcedureIdentity, GleamRPCServerError(error)),
     get_params: fn(transport_in) ->
-      fn(convert.GlitrType) ->
+      fn(ProcedureType, convert.GlitrType) ->
         Result(convert.GlitrValue, GleamRPCServerError(error)),
     recover_error: fn(GleamRPCServerError(error)) -> transport_out,
     encode_result: fn(convert.GlitrValue) -> transport_out,
@@ -80,7 +80,7 @@ pub type ProcedureServer(transport_in, transport_out, error) {
 pub type ProcedureHandler(context, error) =
   fn(
     ProcedureIdentity,
-    fn(convert.GlitrType) ->
+    fn(ProcedureType, convert.GlitrType) ->
       Result(convert.GlitrValue, GleamRPCServerError(error)),
     context,
   ) ->
@@ -196,7 +196,7 @@ fn add_procedure(
 ) -> ProcedureHandler(context, error) {
   fn(
     identity: ProcedureIdentity,
-    params_fn: fn(convert.GlitrType) ->
+    params_fn: fn(ProcedureType, convert.GlitrType) ->
       Result(convert.GlitrValue, GleamRPCServerError(error)),
     context: context,
   ) {
@@ -209,6 +209,7 @@ fn add_procedure(
             && type_ == procedure.type_
           -> {
             use params <- result.try(params_fn(
+              procedure.type_,
               procedure.params_type |> convert.type_def,
             ))
 
