@@ -6,7 +6,7 @@
 Remote Procedure Calls in Gleam !
 
 Note that this library isn't a standalone library, you will need a client and a server implementations.  
-See gleamrpc_http_client and gleamrpc_http_server for HTTP implementations.
+See [gleamrpc_http_client](https://hexdocs.pm/gleamrpc_http_client/) and [gleamrpc_http_server](https://hexdocs.pm/gleamrpc_http_server/) for HTTP implementations.
 
 ```sh
 gleam add gleamrpc@1
