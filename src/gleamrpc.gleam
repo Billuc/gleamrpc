@@ -188,12 +188,17 @@ pub fn with_server(
   )
 }
 
-/// Set the procedure server instance's context factory function
+/// Set the procedure server instance's context factory function  
+/// It also unregisters all previously registered implementations, so it is better to call it first
 pub fn with_context(
-  server: ProcedureServerInstance(transport_in, transport_out, _, error),
+  server: ProcedureServerInstance(transport_in, transport_out, old_ctx, error),
   context_factory: fn(transport_in) -> context,
 ) -> ProcedureServerInstance(transport_in, transport_out, context, error) {
-  ProcedureServerInstance(..server, context_factory: context_factory)
+  ProcedureServerInstance(
+    server: server.server,
+    context_factory: context_factory,
+    handler: fn(_, _, _) { Error(WrongProcedure) },
+  )
 }
 
 /// Register a procedure's implementation in the provided server instance
