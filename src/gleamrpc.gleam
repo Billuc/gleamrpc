@@ -195,7 +195,7 @@ pub fn with_context(
   context_factory: fn(transport_in) -> context,
 ) -> ProcedureServerInstance(transport_in, transport_out, context, error) {
   ProcedureServerInstance(
-    ..server,
+    server: server.server,
     context_factory: context_factory,
     handler: fn(_, _, _) { Error(WrongProcedure) },
   )
