@@ -103,6 +103,9 @@ pub type ProcedureHandler(context, error) =
   ) ->
     Result(convert.GlitrValue, GleamRPCServerError(error))
 
+pub type ProcedureServerMiddleware(transport_in, transport_out) =
+  fn(transport_in, fn(transport_in) -> transport_out) -> transport_out
+
 /// A ProcedureServerInstance combines a procedure server and handler.  
 /// It also manages context creation and procedure registration.
 pub type ProcedureServerInstance(transport_in, transport_out, context, error) {
@@ -110,6 +113,7 @@ pub type ProcedureServerInstance(transport_in, transport_out, context, error) {
     server: ProcedureServer(transport_in, transport_out, error),
     handler: ProcedureHandler(context, error),
     context_factory: fn(transport_in) -> context,
+    middlewares: List(ProcedureServerMiddleware(transport_in, transport_out)),
   )
 }
 
@@ -156,9 +160,7 @@ pub fn with_client(
 /// Example:
 /// 
 /// ```gleam
-/// use data <- my_procedure
-///   |> gleamrpc.with_client(my_client())
-///   |> gleamrpc.call(my_params)
+/// use data <- gleamrpc.call(my_procedure |> gleamrpc.with_client(my_client()), my_params)
 /// 
 /// // do something with data
 /// ``` 
@@ -185,6 +187,7 @@ pub fn with_server(
     server,
     fn(_, _, _) { Error(WrongProcedure) },
     function.identity,
+    [],
   )
 }
 
@@ -198,7 +201,20 @@ pub fn with_context(
     server: server.server,
     context_factory: context_factory,
     handler: fn(_, _, _) { Error(WrongProcedure) },
+    middlewares: server.middlewares,
   )
+}
+
+/// Adds a middleware to be executed before/after executing the implementations.  
+/// Can be used to transform input or output data or to conditionally short-circuit execution.
+pub fn with_middleware(
+  server: ProcedureServerInstance(transport_in, transport_out, ctx, error),
+  middleware: ProcedureServerMiddleware(transport_in, transport_out),
+) -> ProcedureServerInstance(transport_in, transport_out, ctx, error) {
+  ProcedureServerInstance(..server, middlewares: [
+    middleware,
+    ..server.middlewares
+  ])
 }
 
 /// Register a procedure's implementation in the provided server instance
@@ -228,6 +244,8 @@ pub fn serve(
   server: ProcedureServerInstance(transport_in, transport_out, context, error),
 ) -> fn(transport_in) -> transport_out {
   fn(in: transport_in) {
+    use in <- execute_middlewares(in, server.middlewares)
+
     let result = {
       use identity <- result.try(server.server.get_identity(in))
       let params_fn = server.server.get_params(in)
@@ -240,6 +258,20 @@ pub fn serve(
     case result {
       Ok(out) -> out
       Error(err) -> server.server.recover_error(err)
+    }
+  }
+}
+
+fn execute_middlewares(
+  in: transport_in,
+  middlewares: List(ProcedureServerMiddleware(transport_in, transport_out)),
+  next: fn(transport_in) -> transport_out,
+) -> transport_out {
+  case middlewares {
+    [] -> next(in)
+    [middleware, ..rest] -> {
+      use new_in <- middleware(in)
+      execute_middlewares(new_in, rest, next)
     }
   }
 }
