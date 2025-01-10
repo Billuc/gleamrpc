@@ -33,8 +33,10 @@ pub type ProcedureIdentity {
 }
 
 /// Error wrapper for GleamRPC
-pub type GleamRPCError(error) {
-  GleamRPCError(error: error)
+pub type GleamRPCClientError(error) {
+  TransportError(error: error)
+  DataDecodeError(error: List(dynamic.DecodeError))
+  DataEncodeError(error: error)
 }
 
 /// An error that can occur during the execution of the implementation of a procedure
@@ -57,22 +59,25 @@ pub type Router {
 
 /// A procedure client is a way to transmit the data of the procedure to execute and get back its data.  
 /// You should not create procedure clients directly, but rather use libraries such as `gleamrpc_http_client`.
-pub type ProcedureClient(params, return, error) {
+pub type ProcedureClient(transport_in, transport_out, error) {
   ProcedureClient(
-    call: fn(
-      Procedure(params, return),
-      params,
-      fn(Result(return, GleamRPCError(error))) -> Nil,
+    encode_data: fn(ProcedureIdentity, convert.GlitrValue) ->
+      Result(transport_in, GleamRPCClientError(error)),
+    send_and_receive: fn(
+      transport_in,
+      fn(Result(transport_out, GleamRPCClientError(error))) -> Nil,
     ) ->
       Nil,
+    decode_data: fn(transport_out, convert.GlitrType) ->
+      Result(convert.GlitrValue, GleamRPCClientError(error)),
   )
 }
 
 /// A ProcedureCall combines a procedure and a procedure client.  
-pub type ProcedureCall(params, return, error) {
+pub type ProcedureCall(transport_in, transport_out, params, return, error) {
   ProcedureCall(
     procedure: Procedure(params, return),
-    client: ProcedureClient(params, return, error),
+    client: ProcedureClient(transport_in, transport_out, error),
   )
 }
 
@@ -146,30 +151,44 @@ pub fn returns(
   Procedure(..procedure, return_type: return_converter)
 }
 
-/// Specify the client to use to call the provided procedure
-pub fn with_client(
-  procedure: Procedure(a, b),
-  client: ProcedureClient(a, b, c),
-) -> ProcedureCall(a, b, c) {
-  ProcedureCall(procedure, client)
-}
-
 /// Execute the procedure call with the provided parameters.
 /// It should be used with the 'use' syntax.
 /// 
 /// Example:
 /// 
 /// ```gleam
-/// use data <- gleamrpc.call(my_procedure |> gleamrpc.with_client(my_client()), my_params)
+/// use data <- gleamrpc.call(my_procedure, my_params, my_client)
 /// 
 /// // do something with data
 /// ``` 
 pub fn call(
-  procedure_call: ProcedureCall(a, b, c),
+  procedure: Procedure(a, b),
   params: a,
-  callback: fn(Result(b, GleamRPCError(c))) -> Nil,
+  client: ProcedureClient(t_in, t_out, err),
+  callback: fn(Result(b, GleamRPCClientError(err))) -> Nil,
 ) -> Nil {
-  procedure_call.client.call(procedure_call.procedure, params, callback)
+  let identity =
+    ProcedureIdentity(procedure.name, procedure.router, procedure.type_)
+  let data = convert.encode(procedure.params_type)(params)
+
+  case client.encode_data(identity, data) {
+    Error(err) -> callback(Error(err))
+    Ok(encoded_data) -> {
+      use return_data <- client.send_and_receive(encoded_data)
+
+      return_data
+      |> result.then(client.decode_data(
+        _,
+        procedure.return_type |> convert.type_def,
+      ))
+      |> result.then(fn(v) {
+        v
+        |> convert.decode(procedure.return_type)
+        |> result.map_error(DataDecodeError)
+      })
+      |> callback
+    }
+  }
 }
 
 // gleamrpc.with_server(http_server())
