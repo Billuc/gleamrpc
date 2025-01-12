@@ -1,7 +1,11 @@
 import convert
+import convert/json as cjson
 import gleam/bool
 import gleam/int
+import gleam/json
 import gleam/option
+import gleam/result
+import gleam/string
 import gleamrpc
 import gleeunit
 import gleeunit/should
@@ -149,4 +153,58 @@ pub fn call_unsupported_type_procedure_test() {
   res_ping
   |> should.be_error
   |> should.equal(gleamrpc.DataEncodeError("wrong type"))
+}
+
+fn mock_server() -> gleamrpc.ProcedureServer(String, String, String) {
+  gleamrpc.ProcedureServer(
+    get_identity: fn(in_data: String) {
+      case in_data |> string.split_once(":") {
+        Ok(#(name, _rest)) ->
+          Ok(gleamrpc.ProcedureIdentity(name, option.None, gleamrpc.Query))
+        _ -> Error(gleamrpc.GetIdentityError("No procedure name"))
+      }
+    },
+    get_params: fn(in_data: String) {
+      fn(_proc_type, glitr_type) {
+        in_data
+        |> string.split_once(":")
+        |> result.replace_error(gleamrpc.GetIdentityError("No procedure name"))
+        |> result.then(fn(v) {
+          case glitr_type {
+            convert.Int ->
+              int.parse(v.1)
+              |> result.map(convert.IntValue)
+              |> result.replace_error(gleamrpc.GetParamsError([]))
+            convert.String -> Ok(convert.StringValue(v.1))
+            convert.Bool -> Ok(convert.BoolValue(v.1 == "True"))
+            _ -> Error(gleamrpc.GetParamsError([]))
+          }
+        })
+      }
+    },
+    recover_error: fn(_error) { "Error" },
+    encode_result: fn(value: convert.GlitrValue) {
+      cjson.encode_value(value) |> json.to_string()
+    },
+  )
+}
+
+pub fn simple_server_test() {
+  let ping_procedure =
+    gleamrpc.query("ping", option.None)
+    |> gleamrpc.params(convert.string())
+    |> gleamrpc.returns(convert.string())
+
+  let server_fn =
+    gleamrpc.with_server(mock_server())
+    |> gleamrpc.with_implementation(ping_procedure, fn(data, _ctx) {
+      case data {
+        "ping" -> Ok("pong")
+        _ -> Error(gleamrpc.ProcedureError("unexpected_data"))
+      }
+    })
+    |> gleamrpc.serve
+
+  server_fn("ping:ping")
+  |> should.equal("\"pong\"")
 }

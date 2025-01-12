@@ -3,11 +3,15 @@
 
 packages = [
   { name = "convert", version = "1.0.1", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "convert", source = "hex", outer_checksum = "2B01F48F8EA81A02838D4A3B0AA236D4AFCB048264990D293C9ED9E0CFAB232C" },
+  { name = "convert_json", version = "1.0.1", build_tools = ["gleam"], requirements = ["convert", "gleam_json", "gleam_stdlib"], otp_app = "convert_json", source = "hex", outer_checksum = "819F75374EFAC2F4A913C08EC6BADBF98ACBA517C2A62A6103814BD85396DF07" },
+  { name = "gleam_json", version = "2.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_json", source = "hex", outer_checksum = "C55C5C2B318533A8072D221C5E06E5A75711C129E420DD1CE463342106012E5D" },
   { name = "gleam_stdlib", version = "0.51.0", build_tools = ["gleam"], requirements = [], otp_app = "gleam_stdlib", source = "hex", outer_checksum = "14AFA8D3DDD7045203D422715DBB822D1725992A31DF35A08D97389014B74B68" },
   { name = "gleeunit", version = "1.2.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "F7A7228925D3EE7D0813C922E062BFD6D7E9310F0BEE585D3A42F3307E3CFD13" },
 ]
 
 [requirements]
 convert = { version = ">= 1.0.0 and < 2.0.0" }
+convert_json = { version = ">= 1.0.1 and < 2.0.0" }
+gleam_json = { version = ">= 2.3.0 and < 3.0.0" }
 gleam_stdlib = { version = ">= 0.34.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
