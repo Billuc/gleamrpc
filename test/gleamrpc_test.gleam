@@ -10,31 +10,32 @@ import gleamrpc
 import gleeunit
 import gleeunit/should
 
+@target(javascript)
+import gleam/javascript/promise
+
 pub fn main() {
   gleeunit.main()
 }
 
 // gleeunit test functions end in `_test`
 pub fn create_query_test() {
-  gleamrpc.query("test", option.None)
-  |> should.equal(gleamrpc.Procedure(
-    "test",
-    option.None,
-    gleamrpc.Query,
-    convert.null(),
-    convert.null(),
-  ))
+  let procedure = gleamrpc.query("test", option.None)
+
+  procedure.name |> should.equal("test")
+  procedure.router |> should.be_none
+  procedure.type_ |> should.equal(gleamrpc.Query)
+  procedure.params_type |> convert.type_def |> should.equal(convert.Null)
+  procedure.return_type |> convert.type_def |> should.equal(convert.Null)
 }
 
 pub fn create_mutation_test() {
-  gleamrpc.mutation("test_mutation", option.None)
-  |> should.equal(gleamrpc.Procedure(
-    "test_mutation",
-    option.None,
-    gleamrpc.Mutation,
-    convert.null(),
-    convert.null(),
-  ))
+  let procedure = gleamrpc.mutation("test_mutation", option.None)
+
+  procedure.name |> should.equal("test_mutation")
+  procedure.router |> should.be_none
+  procedure.type_ |> should.equal(gleamrpc.Mutation)
+  procedure.params_type |> convert.type_def |> should.equal(convert.Null)
+  procedure.return_type |> convert.type_def |> should.equal(convert.Null)
 }
 
 pub fn create_with_router_test() {
@@ -49,15 +50,45 @@ pub fn create_with_router_test() {
 pub fn procedure_params_test() {
   gleamrpc.query("params", option.None)
   |> gleamrpc.params(convert.string())
-  |> fn(proc) { proc.params_type }
-  |> should.equal(convert.string())
+  |> fn(proc) { proc.params_type |> convert.type_def }
+  |> should.equal(convert.String)
 }
 
 pub fn procedure_return_test() {
   gleamrpc.query("returns", option.None)
   |> gleamrpc.returns(convert.list(convert.int()))
-  |> fn(proc) { proc.return_type }
-  |> should.equal(convert.list(convert.int()))
+  |> fn(proc) { proc.return_type |> convert.type_def }
+  |> should.equal(convert.List(convert.Int))
+}
+
+@target(javascript)
+fn mock_send(in: String) -> gleamrpc.DataOut(String, String) {
+  case in {
+    "ping" -> gleamrpc.DataOut(promise.resolve(Ok("pong")))
+    "beep" -> gleamrpc.DataOut(promise.resolve(Ok("boop")))
+    "True" -> gleamrpc.DataOut(promise.resolve(Ok("False")))
+    "1" -> gleamrpc.DataOut(promise.resolve(Ok("2")))
+    _ ->
+      gleamrpc.DataOut(
+        promise.resolve(
+          Error(gleamrpc.TransportError("can't transport that value")),
+        ),
+      )
+  }
+}
+
+@target(erlang)
+fn mock_send(in: String) -> gleamrpc.DataOut(String, String) {
+  case in {
+    "ping" -> gleamrpc.DataOut(Ok("pong"))
+    "beep" -> gleamrpc.DataOut(Ok("boop"))
+    "True" -> gleamrpc.DataOut(Ok("False"))
+    "1" -> gleamrpc.DataOut(Ok("2"))
+    _ ->
+      gleamrpc.DataOut(
+        Error(gleamrpc.TransportError("can't transport that value")),
+      )
+  }
 }
 
 // This is a bad client example but it serves well for the purpose of the tests
@@ -71,18 +102,7 @@ fn mock_client() -> gleamrpc.ProcedureClient(String, String, String) {
         _ -> Error(gleamrpc.DataEncodeError("wrong type"))
       }
     },
-    send_and_receive: fn(
-      in: String,
-      cb: fn(Result(String, gleamrpc.GleamRPCClientError(String))) -> Nil,
-    ) -> Nil {
-      case in {
-        "ping" -> cb(Ok("pong"))
-        "beep" -> cb(Ok("boop"))
-        "True" -> cb(Ok("False"))
-        "1" -> cb(Ok("2"))
-        _ -> cb(Error(gleamrpc.TransportError("can't transport that value")))
-      }
-    },
+    send_and_receive: mock_send,
     decode_data: fn(out: String, type_: convert.GlitrType) -> Result(
       convert.GlitrValue,
       gleamrpc.GleamRPCClientError(String),
@@ -98,17 +118,57 @@ fn mock_client() -> gleamrpc.ProcedureClient(String, String, String) {
   )
 }
 
+@target(javascript)
+fn data_out_should_be_ok(actual: gleamrpc.DataOut(a, b), expected: a) {
+  actual.data
+  |> promise.tap(fn(data) {
+    data
+    |> should.be_ok
+    |> should.equal(expected)
+  })
+}
+
+@target(erlang)
+fn data_out_should_be_ok(actual: gleamrpc.DataOut(a, b), expected: a) {
+  actual.data
+  |> should.be_ok
+  |> should.equal(expected)
+}
+
+@target(javascript)
+fn data_out_should_be_error(
+  actual: gleamrpc.DataOut(a, b),
+  expected: gleamrpc.GleamRPCClientError(b),
+) {
+  actual.data
+  |> promise.tap(fn(data) {
+    data
+    |> should.be_error
+    |> should.equal(expected)
+  })
+}
+
+@target(erlang)
+fn data_out_should_be_error(
+  actual: gleamrpc.DataOut(a, b),
+  expected: gleamrpc.GleamRPCClientError(b),
+) {
+  actual.data
+  |> should.be_error
+  |> should.equal(expected)
+}
+
 pub fn call_string_procedure_test() {
   let ping_procedure =
     gleamrpc.query("ping", option.None)
     |> gleamrpc.params(convert.string())
     |> gleamrpc.returns(convert.string())
 
-  use res_ping <- gleamrpc.call(ping_procedure, "ping", mock_client())
-  res_ping |> should.be_ok |> should.equal("pong")
+  gleamrpc.call(ping_procedure, "ping", mock_client())
+  |> data_out_should_be_ok("pong")
 
-  use res_beep <- gleamrpc.call(ping_procedure, "beep", mock_client())
-  res_beep |> should.be_ok |> should.equal("boop")
+  gleamrpc.call(ping_procedure, "beep", mock_client())
+  |> data_out_should_be_ok("boop")
 }
 
 pub fn call_wrong_string_procedure_test() {
@@ -117,10 +177,10 @@ pub fn call_wrong_string_procedure_test() {
     |> gleamrpc.params(convert.string())
     |> gleamrpc.returns(convert.string())
 
-  use res_ping <- gleamrpc.call(ping_procedure, "blah", mock_client())
-  res_ping
-  |> should.be_error
-  |> should.equal(gleamrpc.TransportError("can't transport that value"))
+  gleamrpc.call(ping_procedure, "blah", mock_client())
+  |> data_out_should_be_error(
+    gleamrpc.TransportError("can't transport that value"),
+)
 }
 
 pub fn call_bool_procedure_test() {
@@ -129,8 +189,8 @@ pub fn call_bool_procedure_test() {
     |> gleamrpc.params(convert.bool())
     |> gleamrpc.returns(convert.bool())
 
-  use res_ping <- gleamrpc.call(procedure, True, mock_client())
-  res_ping |> should.be_ok |> should.equal(False)
+  gleamrpc.call(procedure, True, mock_client())
+  |> data_out_should_be_ok(False)
 }
 
 pub fn call_int_procedure_test() {
@@ -139,8 +199,8 @@ pub fn call_int_procedure_test() {
     |> gleamrpc.params(convert.int())
     |> gleamrpc.returns(convert.int())
 
-  use res_ping <- gleamrpc.call(procedure, 1, mock_client())
-  res_ping |> should.be_ok |> should.equal(2)
+  gleamrpc.call(procedure, 1, mock_client())
+  |> data_out_should_be_ok(2)
 }
 
 pub fn call_unsupported_type_procedure_test() {
@@ -149,10 +209,10 @@ pub fn call_unsupported_type_procedure_test() {
     |> gleamrpc.params(convert.float())
     |> gleamrpc.returns(convert.float())
 
-  use res_ping <- gleamrpc.call(procedure, 1.25, mock_client())
-  res_ping
-  |> should.be_error
-  |> should.equal(gleamrpc.DataEncodeError("wrong type"))
+  gleamrpc.call(procedure, 1.25, mock_client())
+  |> data_out_should_be_error(
+    gleamrpc.DataEncodeError("wrong type"),
+  )
 }
 
 fn mock_server() -> gleamrpc.ProcedureServer(String, String, String) {

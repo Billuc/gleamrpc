@@ -1,8 +1,11 @@
 import convert
-import gleam/dynamic
+import gleam/dynamic/decode
 import gleam/function
 import gleam/option
 import gleam/result
+
+@target(javascript)
+import gleam/javascript/promise
 
 pub type ProcedureType {
   /// A query is a procedure that does not alter data, only retrieves it
@@ -35,7 +38,7 @@ pub type ProcedureIdentity {
 /// Error wrapper for GleamRPC
 pub type GleamRPCClientError(error) {
   TransportError(error: error)
-  DataDecodeError(error: List(dynamic.DecodeError))
+  DataDecodeError(error: List(decode.DecodeError))
   DataEncodeError(error: error)
 }
 
@@ -49,12 +52,48 @@ pub type GleamRPCServerError(error) {
   WrongProcedure
   ProcedureExecError(error: ProcedureError)
   GetIdentityError(error)
-  GetParamsError(errors: List(dynamic.DecodeError))
+  GetParamsError(errors: List(decode.DecodeError))
 }
 
 /// Routers are a way to organize procedures
 pub type Router {
   Router(name: String, parent: option.Option(Router))
+}
+
+@target(javascript)
+pub type DataOut(data_out, error) {
+  DataOut(data: promise.Promise(Result(data_out, GleamRPCClientError(error))))
+}
+
+@target(erlang)
+pub type DataOut(data_out, error) {
+  DataOut(data: Result(data_out, GleamRPCClientError(error)))
+}
+
+@target(javascript)
+fn map_data_out(
+  data_out: DataOut(data_out, error),
+  map_fn: fn(data_out) -> Result(b, GleamRPCClientError(error)),
+) -> DataOut(b, error) {
+  DataOut(data: data_out.data |> promise.map_try(map_fn))
+}
+
+@target(erlang)
+fn map_data_out(
+  data_out: DataOut(data_out, error),
+  map_fn: fn(data_out) -> Result(b, GleamRPCClientError(error)),
+) -> DataOut(b, error) {
+  DataOut(data: data_out.data |> result.then(map_fn))
+}
+
+@target(javascript)
+fn error_data_out(error: GleamRPCClientError(error)) -> DataOut(data_out, error) {
+  DataOut(data: promise.resolve(Error(error)))
+}
+
+@target(erlang)
+fn error_data_out(error: GleamRPCClientError(error)) -> DataOut(data_out, error) {
+  DataOut(data: Error(error))
 }
 
 /// A procedure client is a way to transmit the data of the procedure to execute and get back its data.  
@@ -63,11 +102,7 @@ pub type ProcedureClient(transport_in, transport_out, error) {
   ProcedureClient(
     encode_data: fn(ProcedureIdentity, convert.GlitrValue) ->
       Result(transport_in, GleamRPCClientError(error)),
-    send_and_receive: fn(
-      transport_in,
-      fn(Result(transport_out, GleamRPCClientError(error))) -> Nil,
-    ) ->
-      Nil,
+    send_and_receive: fn(transport_in) -> DataOut(transport_out, error),
     decode_data: fn(transport_out, convert.GlitrType) ->
       Result(convert.GlitrValue, GleamRPCClientError(error)),
   )
@@ -165,30 +200,33 @@ pub fn call(
   procedure: Procedure(a, b),
   params: a,
   client: ProcedureClient(t_in, t_out, err),
-  callback: fn(Result(b, GleamRPCClientError(err))) -> Nil,
-) -> Nil {
+) -> DataOut(b, err) {
   let identity =
     ProcedureIdentity(procedure.name, procedure.router, procedure.type_)
   let data = convert.encode(procedure.params_type)(params)
 
   case client.encode_data(identity, data) {
-    Error(err) -> callback(Error(err))
+    Error(err) -> error_data_out(err)
     Ok(encoded_data) -> {
-      use return_data <- client.send_and_receive(encoded_data)
-
-      return_data
-      |> result.then(client.decode_data(
-        _,
-        procedure.return_type |> convert.type_def,
-      ))
-      |> result.then(fn(v) {
-        v
-        |> convert.decode(procedure.return_type)
-        |> result.map_error(DataDecodeError)
-      })
-      |> callback
+      client.send_and_receive(encoded_data)
+      |> map_data_out(do_decoding(_, procedure, client))
     }
   }
+}
+
+fn do_decoding(
+  data: t_out,
+  procedure: Procedure(a, b),
+  client: ProcedureClient(t_in, t_out, err),
+) -> Result(b, GleamRPCClientError(err)) {
+  use data <- result.try(client.decode_data(
+    data,
+    procedure.return_type |> convert.type_def,
+  ))
+
+  data
+  |> convert.decode(procedure.return_type)
+  |> result.map_error(DataDecodeError)
 }
 
 // gleamrpc.with_server(http_server())
