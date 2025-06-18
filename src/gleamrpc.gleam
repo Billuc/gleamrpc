@@ -61,39 +61,45 @@ pub type Router {
 }
 
 @target(javascript)
-pub type DataOut(data_out, error) {
-  DataOut(data: promise.Promise(Result(data_out, GleamRPCClientError(error))))
+pub type DataOut(data_out) {
+  DataOut(data: promise.Promise(data_out))
 }
 
 @target(erlang)
-pub type DataOut(data_out, error) {
-  DataOut(data: Result(data_out, GleamRPCClientError(error)))
+pub type DataOut(data_out) {
+  DataOut(data: data_out)
+}
+
+pub type ClientDataOut(data_out, error) =
+  DataOut(Result(data_out, GleamRPCClientError(error)))
+
+pub type ServerDataOut(data_out, error) =
+  DataOut(Result(data_out, GleamRPCServerError(error)))
+
+@target(javascript)
+pub fn map_data_out(
+  data_out: DataOut(data_out),
+  map_fn: fn(data_out) -> b,
+) -> DataOut(b) {
+  DataOut(data: data_out.data |> promise.map(map_fn))
+}
+
+@target(erlang)
+pub fn map_data_out(
+  data_out: DataOut(data_out),
+  map_fn: fn(data_out) -> b,
+) -> DataOut(b) {
+  DataOut(data: data_out.data |> map_fn)
 }
 
 @target(javascript)
-fn map_data_out(
-  data_out: DataOut(data_out, error),
-  map_fn: fn(data_out) -> Result(b, GleamRPCClientError(error)),
-) -> DataOut(b, error) {
-  DataOut(data: data_out.data |> promise.map_try(map_fn))
+pub fn create_data_out(data: data_out) -> DataOut(data_out) {
+  DataOut(data: promise.resolve(data))
 }
 
 @target(erlang)
-fn map_data_out(
-  data_out: DataOut(data_out, error),
-  map_fn: fn(data_out) -> Result(b, GleamRPCClientError(error)),
-) -> DataOut(b, error) {
-  DataOut(data: data_out.data |> result.then(map_fn))
-}
-
-@target(javascript)
-fn error_data_out(error: GleamRPCClientError(error)) -> DataOut(data_out, error) {
-  DataOut(data: promise.resolve(Error(error)))
-}
-
-@target(erlang)
-fn error_data_out(error: GleamRPCClientError(error)) -> DataOut(data_out, error) {
-  DataOut(data: Error(error))
+pub fn create_data_out(data: data_out) -> DataOut(data_out) {
+  DataOut(data:)
 }
 
 /// A procedure client is a way to transmit the data of the procedure to execute and get back its data.  
@@ -102,7 +108,7 @@ pub type ProcedureClient(transport_in, transport_out, error) {
   ProcedureClient(
     encode_data: fn(ProcedureIdentity, convert.GlitrValue) ->
       Result(transport_in, GleamRPCClientError(error)),
-    send_and_receive: fn(transport_in) -> DataOut(transport_out, error),
+    send_and_receive: fn(transport_in) -> ClientDataOut(transport_out, error),
     decode_data: fn(transport_out, convert.GlitrType) ->
       Result(convert.GlitrValue, GleamRPCClientError(error)),
   )
@@ -200,13 +206,13 @@ pub fn call(
   procedure: Procedure(a, b),
   params: a,
   client: ProcedureClient(t_in, t_out, err),
-) -> DataOut(b, err) {
+) -> ClientDataOut(b, err) {
   let identity =
     ProcedureIdentity(procedure.name, procedure.router, procedure.type_)
   let data = convert.encode(procedure.params_type)(params)
 
   case client.encode_data(identity, data) {
-    Error(err) -> error_data_out(err)
+    Error(err) -> create_data_out(Error(err))
     Ok(encoded_data) -> {
       client.send_and_receive(encoded_data)
       |> map_data_out(do_decoding(_, procedure, client))
@@ -215,10 +221,11 @@ pub fn call(
 }
 
 fn do_decoding(
-  data: t_out,
+  data: Result(t_out, GleamRPCClientError(err)),
   procedure: Procedure(a, b),
   client: ProcedureClient(t_in, t_out, err),
 ) -> Result(b, GleamRPCClientError(err)) {
+  use data <- result.try(data)
   use data <- result.try(client.decode_data(
     data,
     procedure.return_type |> convert.type_def,

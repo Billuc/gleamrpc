@@ -61,31 +61,14 @@ pub fn procedure_return_test() {
   |> should.equal(convert.List(convert.Int))
 }
 
-@target(javascript)
-fn mock_send(in: String) -> gleamrpc.DataOut(String, String) {
+fn mock_send(in: String) -> gleamrpc.ClientDataOut(String, String) {
   case in {
-    "ping" -> gleamrpc.DataOut(promise.resolve(Ok("pong")))
-    "beep" -> gleamrpc.DataOut(promise.resolve(Ok("boop")))
-    "True" -> gleamrpc.DataOut(promise.resolve(Ok("False")))
-    "1" -> gleamrpc.DataOut(promise.resolve(Ok("2")))
+    "ping" -> gleamrpc.create_data_out(Ok("pong"))
+    "beep" -> gleamrpc.create_data_out(Ok("boop"))
+    "True" -> gleamrpc.create_data_out(Ok("False"))
+    "1" -> gleamrpc.create_data_out(Ok("2"))
     _ ->
-      gleamrpc.DataOut(
-        promise.resolve(
-          Error(gleamrpc.TransportError("can't transport that value")),
-        ),
-      )
-  }
-}
-
-@target(erlang)
-fn mock_send(in: String) -> gleamrpc.DataOut(String, String) {
-  case in {
-    "ping" -> gleamrpc.DataOut(Ok("pong"))
-    "beep" -> gleamrpc.DataOut(Ok("boop"))
-    "True" -> gleamrpc.DataOut(Ok("False"))
-    "1" -> gleamrpc.DataOut(Ok("2"))
-    _ ->
-      gleamrpc.DataOut(
+      gleamrpc.create_data_out(
         Error(gleamrpc.TransportError("can't transport that value")),
       )
   }
@@ -119,42 +102,17 @@ fn mock_client() -> gleamrpc.ProcedureClient(String, String, String) {
 }
 
 @target(javascript)
-fn data_out_should_be_ok(actual: gleamrpc.DataOut(a, b), expected: a) {
+fn data_out_should_equal(actual: gleamrpc.DataOut(a), expected: a) {
   actual.data
   |> promise.tap(fn(data) {
     data
-    |> should.be_ok
     |> should.equal(expected)
   })
 }
 
 @target(erlang)
-fn data_out_should_be_ok(actual: gleamrpc.DataOut(a, b), expected: a) {
+fn data_out_should_equal(actual: gleamrpc.DataOut(a), expected: a) {
   actual.data
-  |> should.be_ok
-  |> should.equal(expected)
-}
-
-@target(javascript)
-fn data_out_should_be_error(
-  actual: gleamrpc.DataOut(a, b),
-  expected: gleamrpc.GleamRPCClientError(b),
-) {
-  actual.data
-  |> promise.tap(fn(data) {
-    data
-    |> should.be_error
-    |> should.equal(expected)
-  })
-}
-
-@target(erlang)
-fn data_out_should_be_error(
-  actual: gleamrpc.DataOut(a, b),
-  expected: gleamrpc.GleamRPCClientError(b),
-) {
-  actual.data
-  |> should.be_error
   |> should.equal(expected)
 }
 
@@ -165,10 +123,10 @@ pub fn call_string_procedure_test() {
     |> gleamrpc.returns(convert.string())
 
   gleamrpc.call(ping_procedure, "ping", mock_client())
-  |> data_out_should_be_ok("pong")
+  |> data_out_should_equal(Ok("pong"))
 
   gleamrpc.call(ping_procedure, "beep", mock_client())
-  |> data_out_should_be_ok("boop")
+  |> data_out_should_equal(Ok("boop"))
 }
 
 pub fn call_wrong_string_procedure_test() {
@@ -178,9 +136,9 @@ pub fn call_wrong_string_procedure_test() {
     |> gleamrpc.returns(convert.string())
 
   gleamrpc.call(ping_procedure, "blah", mock_client())
-  |> data_out_should_be_error(
-    gleamrpc.TransportError("can't transport that value"),
-)
+  |> data_out_should_equal(
+    Error(gleamrpc.TransportError("can't transport that value")),
+  )
 }
 
 pub fn call_bool_procedure_test() {
@@ -190,7 +148,7 @@ pub fn call_bool_procedure_test() {
     |> gleamrpc.returns(convert.bool())
 
   gleamrpc.call(procedure, True, mock_client())
-  |> data_out_should_be_ok(False)
+  |> data_out_should_equal(Ok(False))
 }
 
 pub fn call_int_procedure_test() {
@@ -200,7 +158,7 @@ pub fn call_int_procedure_test() {
     |> gleamrpc.returns(convert.int())
 
   gleamrpc.call(procedure, 1, mock_client())
-  |> data_out_should_be_ok(2)
+  |> data_out_should_equal(Ok(2))
 }
 
 pub fn call_unsupported_type_procedure_test() {
@@ -210,9 +168,7 @@ pub fn call_unsupported_type_procedure_test() {
     |> gleamrpc.returns(convert.float())
 
   gleamrpc.call(procedure, 1.25, mock_client())
-  |> data_out_should_be_error(
-    gleamrpc.DataEncodeError("wrong type"),
-  )
+  |> data_out_should_equal(Error(gleamrpc.DataEncodeError("wrong type")))
 }
 
 fn mock_server() -> gleamrpc.ProcedureServer(String, String, String) {
