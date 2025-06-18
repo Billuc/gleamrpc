@@ -215,12 +215,12 @@ pub fn simple_server_test() {
     gleamrpc.with_server(mock_server())
     |> gleamrpc.with_implementation(ping_procedure, fn(data, _ctx) {
       case data {
-        "ping" -> Ok("pong")
-        _ -> Error(gleamrpc.ProcedureError("unexpected_data"))
+        "ping" -> gleamrpc.create_data_out(Ok("pong"))
+        _ -> gleamrpc.create_data_out(Error(gleamrpc.ProcedureError("unexpected_data")))
       }
     })
     |> gleamrpc.serve
 
   server_fn("ping:ping")
-  |> should.equal("\"pong\"")
+  |> data_out_should_equal("\"pong\"")
 }

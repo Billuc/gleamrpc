@@ -93,6 +93,25 @@ pub fn map_data_out(
 }
 
 @target(javascript)
+pub fn then_data_out(
+  data_out: DataOut(data_out),
+  then_fn: fn(data_out) -> DataOut(b),
+) -> DataOut(b) {
+  DataOut(
+    data: data_out.data
+    |> promise.await(fn(data) { then_fn(data).data }),
+  )
+}
+
+@target(erlang)
+pub fn then_data_out(
+  data_out: DataOut(data_out),
+  then_fn: fn(data_out) -> DataOut(b),
+) -> DataOut(b) {
+  data_out.data |> then_fn
+}
+
+@target(javascript)
 pub fn create_data_out(data: data_out) -> DataOut(data_out) {
   DataOut(data: promise.resolve(data))
 }
@@ -100,6 +119,18 @@ pub fn create_data_out(data: data_out) -> DataOut(data_out) {
 @target(erlang)
 pub fn create_data_out(data: data_out) -> DataOut(data_out) {
   DataOut(data:)
+}
+
+fn then_try_data_out(
+  data_out: DataOut(Result(data_out, error)),
+  try_fn: fn(data_out) -> DataOut(Result(b, error)),
+) -> DataOut(Result(b, error)) {
+  use data <- then_data_out(data_out)
+
+  case data {
+    Error(err) -> create_data_out(Error(err))
+    Ok(v) -> try_fn(v)
+  }
 }
 
 /// A procedure client is a way to transmit the data of the procedure to execute and get back its data.  
@@ -147,10 +178,11 @@ pub type ProcedureHandler(context, error) =
       Result(convert.GlitrValue, GleamRPCServerError(error)),
     context,
   ) ->
-    Result(convert.GlitrValue, GleamRPCServerError(error))
+    ServerDataOut(convert.GlitrValue, error)
 
 pub type ProcedureServerMiddleware(transport_in, transport_out) =
-  fn(transport_in, fn(transport_in) -> transport_out) -> transport_out
+  fn(transport_in, fn(transport_in) -> DataOut(transport_out)) ->
+    DataOut(transport_out)
 
 /// A ProcedureServerInstance combines a procedure server and handler.  
 /// It also manages context creation and procedure registration.
@@ -249,7 +281,7 @@ pub fn with_server(
 ) -> ProcedureServerInstance(transport_in, transport_out, transport_in, error) {
   ProcedureServerInstance(
     server,
-    fn(_, _, _) { Error(WrongProcedure) },
+    fn(_, _, _) { create_data_out(Error(WrongProcedure)) },
     function.identity,
     [],
   )
@@ -264,7 +296,7 @@ pub fn with_context(
   ProcedureServerInstance(
     server: server.server,
     context_factory: context_factory,
-    handler: fn(_, _, _) { Error(WrongProcedure) },
+    handler: fn(_, _, _) { create_data_out(Error(WrongProcedure)) },
     middlewares: server.middlewares,
   )
 }
@@ -285,7 +317,7 @@ pub fn with_middleware(
 pub fn with_implementation(
   server: ProcedureServerInstance(transport_in, transport_out, context, error),
   procedure: Procedure(params, return),
-  implementation: fn(params, context) -> Result(return, ProcedureError),
+  implementation: fn(params, context) -> DataOut(Result(return, ProcedureError)),
 ) -> ProcedureServerInstance(transport_in, transport_out, context, error) {
   ProcedureServerInstance(
     ..server,
@@ -306,20 +338,24 @@ pub fn with_implementation(
 /// ```
 pub fn serve(
   server: ProcedureServerInstance(transport_in, transport_out, context, error),
-) -> fn(transport_in) -> transport_out {
+) -> fn(transport_in) -> DataOut(transport_out) {
   fn(in: transport_in) {
     use in <- execute_middlewares(in, server.middlewares)
 
     let result = {
-      use identity <- result.try(server.server.get_identity(in))
+      use identity <- then_try_data_out(
+        create_data_out(server.server.get_identity(in)),
+      )
       let params_fn = server.server.get_params(in)
-
       let context = server.context_factory(in)
-      server.handler(identity, params_fn, context)
+
+      use result <- map_data_out(server.handler(identity, params_fn, context))
+      result
       |> result.map(server.server.encode_result)
     }
 
-    case result {
+    use result_data <- map_data_out(result)
+    case result_data {
       Ok(out) -> out
       Error(err) -> server.server.recover_error(err)
     }
@@ -329,8 +365,8 @@ pub fn serve(
 fn execute_middlewares(
   in: transport_in,
   middlewares: List(ProcedureServerMiddleware(transport_in, transport_out)),
-  next: fn(transport_in) -> transport_out,
-) -> transport_out {
+  next: fn(transport_in) -> DataOut(transport_out),
+) -> DataOut(transport_out) {
   case middlewares {
     [] -> next(in)
     [middleware, ..rest] -> {
@@ -343,7 +379,7 @@ fn execute_middlewares(
 fn add_procedure(
   handler: ProcedureHandler(context, error),
   procedure: Procedure(params, return),
-  implementation: fn(params, context) -> Result(return, ProcedureError),
+  implementation: fn(params, context) -> DataOut(Result(return, ProcedureError)),
 ) -> ProcedureHandler(context, error) {
   fn(
     identity: ProcedureIdentity,
@@ -351,31 +387,42 @@ fn add_procedure(
       Result(convert.GlitrValue, GleamRPCServerError(error)),
     context: context,
   ) {
-    case handler(identity, params_fn, context) {
+    use data <- then_data_out(handler(identity, params_fn, context))
+
+    case data {
       Error(WrongProcedure) ->
+        // If we didn't find the procedure in the handler, we check if it matches the provided identity
         case identity {
           ProcedureIdentity(name, router, type_)
             if name == procedure.name
             && router == procedure.router
             && type_ == procedure.type_
           -> {
-            use params <- result.try(params_fn(
-              procedure.type_,
-              procedure.params_type |> convert.type_def,
-            ))
+            let params =
+              params_fn(
+                procedure.type_,
+                procedure.params_type |> convert.type_def,
+              )
+              |> result.then(fn(params) {
+                params
+                |> convert.decode(procedure.params_type)
+                |> result.map_error(GetParamsError)
+              })
 
-            params
-            |> convert.decode(procedure.params_type)
-            |> result.map_error(GetParamsError)
-            |> result.then(fn(params) {
-              implementation(params, context)
-              |> result.map_error(ProcedureExecError)
-            })
-            |> result.map(convert.encode(procedure.return_type))
+            case params {
+              Ok(params) ->
+                implementation(params, context)
+                |> map_data_out(fn(data_out) {
+                  data_out
+                  |> result.map(convert.encode(procedure.return_type))
+                  |> result.map_error(ProcedureExecError)
+                })
+              Error(err) -> create_data_out(Error(err))
+            }
           }
-          _ -> Error(WrongProcedure)
+          _ -> create_data_out(Error(WrongProcedure))
         }
-      _ as result -> result
+      _ as result -> create_data_out(result)
     }
   }
 }
